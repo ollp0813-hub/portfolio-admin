@@ -3460,6 +3460,76 @@ function buildMonthGrid(y,m,forOutput){
   return '<div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;margin-bottom:6px">'+head+'</div>'
         +'<div class="jw-cal-grid" style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px">'+cells+'</div>';
 }
+/* ---------- 일정 캘린더 : 보는 사람의 "오늘" 기준으로 스스로 갱신 ----------
+   복사한 HTML 안에 일정 데이터만 심어 두고, 페이지가 열릴 때마다
+   브라우저 날짜로 달력(이번 달부터 N개월 · 오늘 표시 · 지난 날짜 회색)을 다시 그립니다. */
+function calConfigJson(){
+  const S=data.schedule, d={};
+  Object.keys(S.days||{}).forEach(k=>{
+    const v=S.days[k]||{};
+    const items=(v.items||[]).filter(x=>x.visible!==false).slice(0,2)
+      .map(x=>(x.start?x.start+" ":"")+(x.title||"")).filter(x=>x.trim());
+    if(v.status||items.length) d[k]=[v.status||"",items];
+  });
+  return JSON.stringify({
+    m:Math.max(1,Math.min(6,Number(S.months)||2)),
+    p:S.dimPast!==false?1:0,
+    s:(S.statuses||[]).map(x=>[x.id,x.name,x.color,x.bg]),
+    d:d
+  });
+}
+function calRenderFn(){
+  try{
+    var w=document.querySelector('[data-jwcal]'); if(!w) return;
+    var wrap=w.querySelector('[data-jwmwrap]'); if(!wrap) return;
+    var cfg=JSON.parse(w.getAttribute('data-jwcfg')||'{}');
+    var E=function(x){return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')};
+    var P=function(n){return (n<10?'0':'')+n};
+    var now=new Date(), ty=now.getFullYear(), tm=now.getMonth(), td=now.getDate();
+    var today=ty+'-'+P(tm+1)+'-'+P(td);
+    var st={}; (cfg.s||[]).forEach(function(a){st[a[0]]={n:a[1],c:a[2],b:a[3]}});
+    var names=['일','월','화','수','목','금','토'];
+    var n=cfg.m||2, html='';
+    for(var i=0;i<n;i++){
+      var d0=new Date(ty,tm+i,1), y=d0.getFullYear(), m=d0.getMonth();
+      var first=d0.getDay(), days=new Date(y,m+1,0).getDate();
+      var cells='';
+      for(var e=0;e<first;e++) cells+='<div></div>';
+      for(var d=1;d<=days;d++){
+        var k=y+'-'+P(m+1)+'-'+P(d);
+        var info=(cfg.d||{})[k], s=info&&info[0]?st[info[0]]:null;
+        var dow=new Date(y,m,d).getDay();
+        var numC=dow===0?'#e05555':dow===6?'#4b7bec':'#1e293b';
+        var past=!!cfg.p&&k<today;
+        var items='';
+        if(info&&!past) for(var q=0;q<info[1].length;q++)
+          items+='<div style="font-size:9.5px;color:#64748b;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+E(info[1][q])+'</div>';
+        var chip=(s&&!past)?'<div style="display:inline-block;margin-top:5px;font-size:9.5px;font-weight:800;padding:2px 7px;border-radius:999px;background:'+s.b+';color:'+s.c+'">'+E(s.n)+'</div>':'';
+        var ring=(k===today)?'box-shadow:0 0 0 2px #1a73e8 inset;':'';
+        cells+='<div class="jw-cal-cell" style="background:'+(past?'#f1f5f9':(s?'#fff':'#f8faff'))+';border:1px solid '+(past?'#e9eef5':'#eef2f6')
+          +';border-radius:12px;padding:8px 6px;min-height:58px;box-sizing:border-box;'+(past?'opacity:.62;':'')+ring+'">'
+          +'<div style="font-size:12px;font-weight:800;color:'+(past?'#b6c0cd':numC)+'">'+d+'</div>'+chip+items+'</div>';
+      }
+      var head='';
+      for(var h=0;h<7;h++) head+='<div style="text-align:center;font-size:11px;font-weight:800;padding:4px 0;color:'+(h===0?'#e05555':h===6?'#4b7bec':'#94a3b8')+'">'+names[h]+'</div>';
+      html+='<div data-jwm="'+i+'" data-jwtitle="'+y+'년 '+(m+1)+'월" style="display:none">'
+        +'<div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;margin-bottom:6px">'+head+'</div>'
+        +'<div class="jw-cal-grid" style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px">'+cells+'</div></div>';
+    }
+    wrap.innerHTML=html;
+    var ms=wrap.querySelectorAll('[data-jwm]');
+    var idx=parseInt(w.getAttribute('data-i'))||0;
+    if(idx>ms.length-1) idx=ms.length-1; if(idx<0) idx=0;
+    w.setAttribute('data-i',idx);
+    for(var z=0;z<ms.length;z++) ms[z].style.display=(z===idx?'block':'none');
+    var lb=w.querySelector('[data-jwlabel]'); if(lb&&ms[idx]) lb.innerText=ms[idx].getAttribute('data-jwtitle');
+  }catch(err){}
+}
+function calJsText(){
+  if(!(data.schedule&&data.schedule.enabled)) return "";
+  return "(function(){var f="+calRenderFn.toString()+";f();setTimeout(f,400);setTimeout(f,1500);"
+    +"try{window.addEventListener('load',f);document.addEventListener('visibilitychange',function(){if(!document.hidden)f()})}catch(e){}})()";
+}
 function buildScheduleSection(secStyle,h3Style){
   const S=data.schedule;
   const now=new Date();
@@ -3479,13 +3549,13 @@ function buildScheduleSection(secStyle,h3Style){
   const firstTitle=now.getFullYear()+"년 "+(now.getMonth()+1)+"월";
   return '<div style="'+secStyle+';'+detailFontCss()+'">'
     +'<h3 style="'+h3Style+'">'+esc(S.title||"작업 일정 캘린더")+'</h3>'
-    +'<div data-jwcal="1" data-i="0" style="background:#fff;border:1px solid #eef2f6;border-radius:18px;padding:16px;box-sizing:border-box">'
+    +'<div data-jwcal="1" data-i="0" data-jwcfg="'+esc(calConfigJson())+'" style="background:#fff;border:1px solid #eef2f6;border-radius:18px;padding:16px;box-sizing:border-box">'
       +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">'
         +'<button type="button" onclick="'+esc(nav(-1))+'" style="'+btn+'">‹</button>'
         +'<div data-jwlabel style="font-size:15px;font-weight:800;color:#1e293b;min-width:116px;text-align:center">'+firstTitle+'</div>'
         +'<button type="button" onclick="'+esc(nav(1))+'" style="'+btn+'">›</button>'
         +'<div style="flex:1"></div><div style="display:flex;gap:6px;flex-wrap:wrap">'+legend+'</div>'
-      +'</div>'+months
+      +'</div><div data-jwmwrap="1">'+months+'</div>'
     +'</div></div>';
 }
 
@@ -3623,6 +3693,8 @@ function decorateStyleTag(root){
   }
   const fjs=faqJsText();
   if(fjs) js = js ? (js+";"+fjs) : fjs;
+  const cjs=calJsText();
+  if(cjs) js = js ? (js+";"+cjs) : cjs;
   if(js){
     // @import 가 실패하면 load 대신 error 가 나므로 둘 다 걸어둡니다.
     stEl.setAttribute("onload",js);
