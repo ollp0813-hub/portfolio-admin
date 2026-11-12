@@ -1545,7 +1545,25 @@ input.mnIco.bad{border-color:rgba(245,158,11,.6);background:rgba(245,158,11,.08)
         <input type="checkbox" class="cbx" id="schDimPast" onchange="setSchedDimPast(this.checked)">
         <span>지난 날짜 자동 회색 처리<small>오늘보다 이전 날짜는 상태 표시를 지우고 흐리게 내보냅니다. 예약 불가를 따로 찍을 필요가 없습니다.</small></span>
       </label>
-      <div class="hint" style="margin-top:8px">※ 캘린더는 복사하는 HTML에 그대로 새겨집니다. 일정을 바꾼 뒤에는 <b>전체 복사</b>로 다시 붙여넣어야 실제 페이지에 반영됩니다.</div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line,#e5e9f0)">
+        <span class="lab">표시 방식</span>
+        <select id="schMode" class="iqSel" style="width:100%;max-width:420px;padding:9px 10px;font-size:13px" onchange="setSchedMode(this.value)">
+          <option value="inline">직접 삽입 (복사한 HTML에 달력을 새김)</option>
+          <option value="iframe">iframe 임베드 (별도 웹 페이지를 불러옴 · 날짜 자동)</option>
+        </select>
+        <div id="schFrameBox" style="display:none;margin-top:10px">
+          <div class="setCols">
+            <div><span class="lab">달력 페이지 주소 (https://…/calendar.html)</span><input id="schUrl" class="qPaste" style="min-height:0;font-family:inherit;font-size:13px" placeholder="https://내아이디.github.io/artmug-calendar/calendar.html" oninput="setSchedUrl(this.value)"></div>
+            <div><span class="lab">iframe 높이 (px)</span><input id="schFrameH" type="number" min="300" max="1400" step="10" class="qPaste" style="min-height:0;font-family:inherit;font-size:13px" oninput="setSchedFrameH(this.value)"></div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+            <button class="btn" onclick="downloadCalendarPage()">⬇ 달력 페이지 파일 저장 (calendar.html)</button>
+            <button class="btn gray" onclick="previewCalendarPage()">새 창에서 미리보기</button>
+          </div>
+          <div class="hint" style="margin-top:8px"><b>처음 한 번만</b> : ① 위 파일을 웹에 올리기 (GitHub Pages, Netlify 등) → ② 주소를 위에 입력 → ③ <b>전체 복사</b>로 아트머그에 한 번 붙여넣기.<br><b>이후</b> : 일정을 바꾸면 <b>calendar.html 파일만 같은 주소에 다시 덮어쓰기</b> 하면 됩니다. 아트머그 코드는 다시 붙여넣지 않아도 되고, 날짜는 열 때마다 자동으로 오늘로 바뀝니다.</div>
+        </div>
+      </div>
+      <div class="hint" id="schModeHint" style="margin-top:8px">※ 캘린더는 복사하는 HTML에 그대로 새겨집니다. 일정을 바꾼 뒤에는 <b>전체 복사</b>로 다시 붙여넣어야 실제 페이지에 반영됩니다.</div>
     </div>
 
     <div class="card iqCard" style="margin-top:12px">
@@ -3165,7 +3183,7 @@ function defaultSchedule(){
     {id:"closed",name:"마감",      color:"#e74c3c", bg:"#fdecea"},
     {id:"off",   name:"휴일",      color:"#94a3b8", bg:"#f1f5f9"}
   ];
-  return {enabled:true,title:"작업 일정 캘린더",months:2,statuses:st,defaultStatus:"open",days:{}};
+  return {enabled:true,title:"작업 일정 캘린더",months:2,statuses:st,defaultStatus:"open",days:{},mode:"inline",iframeUrl:"",iframeH:540};
 }
 function migrateV7(d){
   if(!d.pricing||!d.pricing.base) d.pricing=defaultPricing();
@@ -3193,6 +3211,9 @@ function migrateV7(d){
   if(!d.schedule.days||typeof d.schedule.days!=="object") d.schedule.days={};
   d.schedule.enabled=d.schedule.enabled!==false;
   d.schedule.dimPast=d.schedule.dimPast!==false;
+  if(d.schedule.mode!=="iframe") d.schedule.mode="inline";
+  if(typeof d.schedule.iframeUrl!=="string") d.schedule.iframeUrl="";
+  if(typeof d.schedule.iframeH!=="number"||d.schedule.iframeH<300) d.schedule.iframeH=540;
   Object.keys(d.schedule.days).forEach(k=>{
     const v=d.schedule.days[k]||{};
     if(!Array.isArray(v.items)) v.items=[];
@@ -3525,12 +3546,18 @@ function calRenderFn(){
     var lb=w.querySelector('[data-jwlabel]'); if(lb&&ms[idx]) lb.innerText=ms[idx].getAttribute('data-jwtitle');
   }catch(err){}
 }
+function calTouchAttrs(){
+  /* style onload 가 막힌 환경 대비: 달력에 마우스를 올리거나 터치하는 순간 한 번 오늘 기준으로 다시 그립니다 */
+  const code="if(!window.__jwcal){window.__jwcal=1;("+calRenderFn.toString()+")()}";
+  const a=esc(code);
+  return 'onmouseover="'+a+'" ontouchstart="'+a+'" onpointerdown="'+a+'" onfocusin="'+a+'"';
+}
 function calJsText(){
   if(!(data.schedule&&data.schedule.enabled)) return "";
   return "(function(){var f="+calRenderFn.toString()+";f();setTimeout(f,400);setTimeout(f,1500);"
     +"try{window.addEventListener('load',f);document.addEventListener('visibilitychange',function(){if(!document.hidden)f()})}catch(e){}})()";
 }
-function buildScheduleSection(secStyle,h3Style){
+function calCardHtml(withTouch){
   const S=data.schedule;
   const now=new Date();
   const n=Math.max(1,Math.min(6,Number(S.months)||2));
@@ -3547,18 +3574,46 @@ function buildScheduleSection(secStyle,h3Style){
   const nav=(dir)=>"var w=this.closest('[data-jwcal]');var ms=w.querySelectorAll('[data-jwm]');var i=parseInt(w.getAttribute('data-i'))||0;i+=("+dir+");if(i<0)i=0;if(i>ms.length-1)i=ms.length-1;w.setAttribute('data-i',i);for(var k=0;k<ms.length;k++){ms[k].style.display=(k==i?'block':'none')}w.querySelector('[data-jwlabel]').innerText=ms[i].getAttribute('data-jwtitle');";
   const btn="width:34px;height:34px;border-radius:11px;border:1px solid #eef2f6;background:#fff;color:#475569;font-size:15px;font-weight:800;cursor:pointer;line-height:1;";
   const firstTitle=now.getFullYear()+"년 "+(now.getMonth()+1)+"월";
-  return '<div style="'+secStyle+';'+detailFontCss()+'">'
-    +'<h3 style="'+h3Style+'">'+esc(S.title||"작업 일정 캘린더")+'</h3>'
-    +'<div data-jwcal="1" data-i="0" data-jwcfg="'+esc(calConfigJson())+'" style="background:#fff;border:1px solid #eef2f6;border-radius:18px;padding:16px;box-sizing:border-box">'
+  return '<div data-jwcal="1" data-i="0" data-jwcfg="'+esc(calConfigJson())+'" '+(withTouch?calTouchAttrs():'')+' style="background:#fff;border:1px solid #eef2f6;border-radius:18px;padding:16px;box-sizing:border-box">'
       +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">'
         +'<button type="button" onclick="'+esc(nav(-1))+'" style="'+btn+'">‹</button>'
         +'<div data-jwlabel style="font-size:15px;font-weight:800;color:#1e293b;min-width:116px;text-align:center">'+firstTitle+'</div>'
         +'<button type="button" onclick="'+esc(nav(1))+'" style="'+btn+'">›</button>'
         +'<div style="flex:1"></div><div style="display:flex;gap:6px;flex-wrap:wrap">'+legend+'</div>'
       +'</div><div data-jwmwrap="1">'+months+'</div>'
-    +'</div></div>';
+    +'</div>';
 }
-
+function buildScheduleSection(secStyle,h3Style){
+  const S=data.schedule;
+  const url=(S.iframeUrl||"").trim();
+  if(S.mode==="iframe"&&/^https:\/\//i.test(url)){
+    const h=Math.max(300,Math.min(1600,Number(S.iframeH)||540));
+    return '<div style="'+secStyle+';'+detailFontCss()+'">'
+      +'<h3 style="'+h3Style+'">'+esc(S.title||"작업 일정 캘린더")+'</h3>'
+      +'<iframe src="'+esc(url)+'" title="'+esc(S.title||"작업 일정 캘린더")+'" loading="lazy" style="display:block;width:100%;height:'+h+'px;border:0;border-radius:18px;background:transparent"></iframe>'
+      +'</div>';
+  }
+  return '<div style="'+secStyle+';'+detailFontCss()+'">'
+    +'<h3 style="'+h3Style+'">'+esc(S.title||"작업 일정 캘린더")+'</h3>'
+    +calCardHtml(true)+'</div>';
+}
+/* ---------- iframe 용 단독 달력 페이지 (calendar.html) ----------
+   웹에 올려두고 아트머그에서는 iframe 으로 불러옵니다. 열 때마다 브라우저 날짜로 그려지고,
+   열어 둔 채 자정이 지나도 1분 안에 오늘로 바뀝니다. */
+function buildCalendarPageHTML(){
+  const pre=(data.settings&&data.settings.detailFont==="pretendard")?PRETENDARD_IMPORT:"";
+  const js="(function(){var f="+calRenderFn.toString()+";f();"
+    +"var last=new Date().toDateString();"
+    +"setInterval(function(){var n=new Date().toDateString();if(n!==last){last=n;f()}},30000);"
+    +"document.addEventListener('visibilitychange',function(){if(!document.hidden){last=new Date().toDateString();f()}});"
+    +"window.addEventListener('pageshow',f);})();";
+  return '<!doctype html>\n<html lang="ko"><head><meta charset="utf-8">'
+    +'<meta name="viewport" content="width=device-width,initial-scale=1">'
+    +'<meta name="robots" content="noindex">'
+    +'<title>'+esc((data.schedule.title||"작업 일정 캘린더"))+'</title>'
+    +'<style>'+pre+'html,body{margin:0;padding:0;background:transparent}body{padding:2px;box-sizing:border-box;'+detailFontCss()+'-webkit-font-smoothing:antialiased}'+CAL_MEDIA_CSS+'</style>'
+    +'</head><body>'+calCardHtml(false)+'<script>'+js+'<\/script></body></html>';
+}
 /* ---------- 상세페이지 : 상단 줄 배너 ---------- */
 function activeEventList(){
   return (data.events||[]).filter(e=>e.visible!==false&&evIsActive(e));
@@ -4769,6 +4824,22 @@ function schMove(dir){ const c=schCursor(); const d=new Date(c.y,c.m+dir,1); sch
 function setSchedOn(v){ commit("일정 표시 변경 전 백업",()=>{data.schedule.enabled=v}) }
 function setSchedTitle(v){ data.schedule.title=v; schSave() }
 function setSchedDimPast(v){ data.schedule.dimPast=!!v; sfx("tap"); persist(); renderSchedule(); generateOutput() }
+function setSchedMode(v){ data.schedule.mode=(v==="iframe")?"iframe":"inline"; sfx("tap"); persist(); renderSchedule(); generateOutput() }
+function setSchedUrl(v){ data.schedule.iframeUrl=String(v||"").trim(); schSave() }
+function setSchedFrameH(v){ const n=Number(v); if(n>=300&&n<=1600) data.schedule.iframeH=Math.round(n); schSave() }
+function downloadCalendarPage(){
+  const blob=new Blob([buildCalendarPageHTML()],{type:"text/html;charset=utf-8"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download="calendar.html"; a.click();
+  URL.revokeObjectURL(a.href);
+  toast("calendar.html 을 저장했습니다. 웹에 올려 주세요.","ok");
+}
+function previewCalendarPage(){
+  const blob=new Blob([buildCalendarPageHTML()],{type:"text/html;charset=utf-8"});
+  const url=URL.createObjectURL(blob);
+  window.open(url,"_blank");
+  setTimeout(()=>URL.revokeObjectURL(url),20000);
+}
 function setSchedMonths(v){ data.schedule.months=Number(v)||2; schSave() }
 let schTimer=null;
 function schSave(){ clearTimeout(schTimer); schTimer=setTimeout(()=>{persist();generateOutput()},160) }
@@ -4821,6 +4892,11 @@ function renderSchedule(){
   $("schDimPast").checked=S.dimPast!==false;
   $("schTitle").value=S.title||"";
   $("schMonths").value=String(S.months||2);
+  $("schMode").value=S.mode==="iframe"?"iframe":"inline";
+  $("schFrameBox").style.display=S.mode==="iframe"?"block":"none";
+  if(document.activeElement!==$("schUrl")) $("schUrl").value=S.iframeUrl||"";
+  if(document.activeElement!==$("schFrameH")) $("schFrameH").value=String(S.iframeH||540);
+  $("schModeHint").style.display=S.mode==="iframe"?"none":"block";
   $("schLabel").textContent=c.y+"년 "+(c.m+1)+"월";
   const dows=["일","월","화","수","목","금","토"];
   $("schDow").innerHTML=dows.map((n,i)=>`<div class="calDow ${i===0?"sun":i===6?"sat":""}">${n}</div>`).join("")+`<div class="calDow"></div>`;
